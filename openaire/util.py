@@ -17,6 +17,7 @@ def get_dataset_ids(
     glob_pattern: str = "df_openaire_types*.parquet",
     openaire_type="dataset",
 ) -> Set:
+    datadir = Path(datadir)
     openaire_type_files = list(datadir.glob(glob_pattern))
     ids_set = set()
     for ids_set_from_one_file in yield_dataset_ids(openaire_type_files, openaire_type=openaire_type):

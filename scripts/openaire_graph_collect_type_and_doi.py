@@ -13,7 +13,6 @@ from typing import Union, List, Optional, Dict, Set
 import tarfile
 import gzip
 import json
-import pickle
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
@@ -32,8 +31,6 @@ import logging
 
 root_logger = logging.getLogger()
 logger = root_logger.getChild(__name__)
-
-MAX_FILE_SIZE = 5 * 1024**3  # 5GB uncompressed
 
 
 def write_types_df_part_file(
