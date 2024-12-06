@@ -64,7 +64,7 @@ def get_openaire_type_map(
 def get_crosstab(df: pd.DataFrame, type_map: pd.Series) -> pd.DataFrame:
     df_crosstab = pd.crosstab(
         [df["source"], df["target"]], df["relType_name"]
-    ).reset_index(drop=True)
+    ).reset_index(drop=False)
     df_crosstab["source_type"] = df_crosstab["source"].map(type_map)
     df_crosstab["target_type"] = df_crosstab["target"].map(type_map)
     return df_crosstab
