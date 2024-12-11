@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 
-DESCRIPTION = """gather data for dataset relations"""
+DESCRIPTION = """gather data for dataset relations."""
+# At the end, we should output 3 dataframes:
+# - df_relation.parquet
+# - df_relation_doi.parquet
+# - df_provenance.parquet
 
 import sys, os, time
 from pathlib import Path
@@ -8,6 +12,7 @@ from datetime import datetime
 from timeit import default_timer as timer
 from typing import Union, List, Optional, Dict, Set, Iterable
 from joblib import Parallel, delayed
+import json
 
 try:
     from humanfriendly import format_timespan
@@ -19,6 +24,8 @@ except ImportError:
 
 import pandas as pd
 import numpy as np
+
+from clean_doi import clean_doi, NoDoiException
 
 import logging
 
@@ -34,7 +41,7 @@ def load_relations_with_datasets(
     for fp in files:
         _df = pd.read_json(fp, lines=True, engine="pyarrow")
         _df["relType_name"] = _df["relType"].apply(lambda x: x["name"])
-        _df = _df[["source", "target", "relType_name"]]
+        _df = _df[["source", "target", "relType_name", "provenance", "validated"]]
         _df = _df[_df["relType_name"].isin(["Cites", "References", "IsSupplementedBy"])]
         _dfs.append(_df)
     df_relations = pd.concat(_dfs, ignore_index=True)
@@ -61,6 +68,24 @@ def get_openaire_type_map(
     return openaire_type_map
 
 
+def get_openaire_dois(
+    path_to_dois: Path,
+    ids_to_include: Optional[Iterable] = None,
+    glob_pattern: str = "df_openaire_dois*.parquet",
+) -> pd.DataFrame:
+    files = list(path_to_dois.glob(glob_pattern))
+    _dfs = []
+    for fp in files:
+        _df = pd.read_parquet(fp)
+        _dfs.append(_df)
+    df_openaire_doi = pd.concat(_dfs)
+    if ids_to_include is not None:
+        df_openaire_doi = df_openaire_doi[
+            df_openaire_doi["openaire_id"].isin(ids_to_include)
+        ]
+    return df_openaire_doi
+
+
 def get_crosstab(df: pd.DataFrame, type_map: pd.Series) -> pd.DataFrame:
     df_crosstab = pd.crosstab(
         [df["source"], df["target"]], df["relType_name"]
@@ -70,9 +95,30 @@ def get_crosstab(df: pd.DataFrame, type_map: pd.Series) -> pd.DataFrame:
     return df_crosstab
 
 
+def load_corpus_doi_data(path_to_corpus: Path, glob_pattern="*.json") -> pd.DataFrame:
+    # get citations from corpus, only doi-doi citations
+    files = list(path_to_corpus.glob(glob_pattern))
+    corpus_citations_doi = []
+    for fp in files:
+        txt = fp.read_text()
+        records = json.loads(txt)
+        for r in records:
+            try:
+                source_doi = clean_doi(r["publication"])
+                target_doi = clean_doi(r["dataset"])
+                corpus_citations_doi.append((source_doi, target_doi))
+            except NoDoiException:
+                pass
+    return pd.DataFrame(
+        corpus_citations_doi, columns=["doi_source", "doi_target"]
+    ).drop_duplicates()
+
+
 def main(args):
     path_to_relations = Path(args.path_to_relations)
     path_to_types = Path(args.path_to_types)
+    path_to_dois = Path(args.path_to_dois)
+    path_to_corpus = Path(args.path_to_corpus)
     outdir = Path(args.outdir)
     if not outdir.exists():
         logger.debug(f"creating directory: {outdir}")
@@ -99,12 +145,21 @@ def main(args):
     # convert dataframe to series
     all_ids = all_ids[0]
 
-    logger.debug(f"Step 2: load types data from directory: {path_to_types}...")
+    logger.debug(f"Step 2: load openaire types data and doi data")
+    logger.debug(f"Loading openaire types data from directory: {path_to_types}...")
     this_start = timer()
     openaire_type_map = get_openaire_type_map(path_to_types, ids_to_include=all_ids)
     logger.debug(
         f"loaded openaire type map ({len(openaire_type_map)} items). took {format_timespan(timer()-this_start)}"
     )
+    logger.debug(f"Loading openaire doi data from directory: {path_to_dois}...")
+    this_start = timer()
+    df_openaire_doi = get_openaire_dois(path_to_dois, ids_to_include=all_ids)
+    logger.debug(
+        f"loaded openaire dois ({len(df_openaire_doi)} items). took {format_timespan(timer()-this_start)}"
+    )
+    logger.debug(f"num unique openaire ids: {df_openaire_doi['openaire_id'].nunique()}")
+    logger.debug(f"num unique dois: {df_openaire_doi['doi'].nunique()}")
 
     logger.debug("Step 3: get crosstab...")
     this_start = timer()
@@ -113,10 +168,67 @@ def main(args):
         f"done getting crosstab (dataframe shape: {df_crosstab.shape}). took {format_timespan(timer()-this_start)}"
     )
 
-    # checkpoint
-    outfp = outdir.joinpath("df_relations_crosstab_checkpoint.parquet")
-    logger.debug(f"writing to file: {outfp}")
-    df_crosstab.to_parquet(outfp)
+    # # checkpoint
+    # outfp = outdir.joinpath("df_relations_crosstab_checkpoint.parquet")
+    # logger.debug(f"writing to file: {outfp}")
+    # df_crosstab.to_parquet(outfp)
+
+    outfp = outdir.joinpath("df_provenance.parquet")
+    logger.debug(f"saving provenance data to {outfp}")
+    df_relations[["source", "target", "provenance", "validated"]].drop_duplicates(
+        subset=["source", "target"]
+    ).to_parquet(outfp)
+
+    logger.debug(f"Step 4: merge relations and dois")
+    this_start = timer()
+    df_relation_doi = df_crosstab.merge(
+        df_openaire_doi.rename(columns={"openaire_id": "source", "doi": "doi_source"}),
+        how="inner",
+        on="source",
+    )
+    df_relation_doi = df_relation_doi.merge(
+        df_openaire_doi.rename(columns={"openaire_id": "target", "doi": "doi_target"}),
+        how="inner",
+        on="target",
+    )
+    drop_cols = ["Cites", "IsSupplementedBy", "References"]
+    df_relation_doi = df_relation_doi.drop(columns=drop_cols)
+    logger.debug(
+        f"done merging relations and dois. df_relation_doi has shape {df_relation_doi.shape}. took {format_timespan(timer()-this_start)}"
+    )
+
+    logger.debug("Step 5: load corpus data")
+    this_start = timer()
+    df_corpus_citations_doi = load_corpus_doi_data(path_to_corpus)
+    logger.debug(
+        f"loaded {len(df_corpus_citations_doi)} rows. took {format_timespan(timer()-this_start)}"
+    )
+
+    logger.debug("Step 6: merge corpus data with openaire data")
+    this_start = timer()
+    df_corpus_citations_doi["in_corpus"] = True
+    df_relation_doi = df_relation_doi.merge(
+        df_corpus_citations_doi, how="left", on=["doi_source", "doi_target"]
+    )
+    df_relation_doi["in_corpus"] = df_relation_doi["in_corpus"].fillna(value=False)
+    to_merge = df_relation_doi[df_relation_doi["in_corpus"] == True]
+    to_merge = to_merge[["source", "target", "in_corpus"]].drop_duplicates()
+    df_relation = df_crosstab.merge(to_merge, how="left", on=["source", "target"])
+    df_relation["in_corpus"] = df_relation["in_corpus"].fillna(value=False)
+    logger.debug(
+        f"done merging in corpus data. took {format_timespan(timer()-this_start)}"
+    )
+
+    logger.debug("Step 7: save files")
+    this_start = timer()
+    outfp = outdir.joinpath("df_relation.parquet")
+    logger.debug(f"writing dataframe with shape {df_relation.shape} to {outfp}")
+    df_relation.to_parquet(outfp)
+
+    outfp = outdir.joinpath("df_relation_doi.parquet")
+    logger.debug(f"writing dataframe with shape {df_relation_doi.shape} to {outfp}")
+    df_relation_doi.to_parquet(outfp)
+    logger.debug(f"step 7 (saving files) took {format_timespan(timer()-this_start)}")
 
 
 if __name__ == "__main__":
@@ -141,6 +253,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "path_to_types", help="directory with types data in parquet format"
+    )
+    parser.add_argument(
+        "path_to_dois", help="directory with openaire doi data in parquet format"
+    )
+    parser.add_argument(
+        "path_to_corpus", help="directory with Data Citation Corpus data"
     )
     parser.add_argument("outdir", help="output directory")
     parser.add_argument("--debug", action="store_true", help="output debugging info")
