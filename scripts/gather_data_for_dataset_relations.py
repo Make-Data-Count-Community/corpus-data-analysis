@@ -13,6 +13,7 @@ from timeit import default_timer as timer
 from typing import Union, List, Optional, Dict, Set, Iterable
 from joblib import Parallel, delayed
 import json
+import gc
 
 try:
     from humanfriendly import format_timespan
@@ -42,6 +43,9 @@ def load_relations_with_datasets(
         _df = pd.read_json(fp, lines=True, engine="pyarrow")
         _df["relType_name"] = _df["relType"].apply(lambda x: x["name"])
         _df = _df[["source", "target", "relType_name", "provenance", "validated"]]
+        prov_objs = _df["provenance"].dropna()
+        _df["trust"] = prov_objs.apply(lambda x: x["trust"])
+        _df["provenance"] = prov_objs.apply(lambda x: x["provenance"])
         _df = _df[_df["relType_name"].isin(["Cites", "References", "IsSupplementedBy"])]
         _dfs.append(_df)
     df_relations = pd.concat(_dfs, ignore_index=True)
@@ -133,6 +137,14 @@ def main(args):
         f"loaded {len(df_relations)} relations. took {format_timespan(timer()-this_start)}"
     )
 
+    outfp = outdir.joinpath("df_provenance.parquet")
+    logger.debug(f"saving provenance data to {outfp}")
+    df_relations[
+        ["source", "target", "provenance", "trust", "validated"]
+    ].drop_duplicates(subset=["source", "target"]).to_parquet(outfp)
+    logger.debug("dropping provenance columns")
+    df_relations.drop(columns=['provenance', 'trust', 'validated'], inplace=True)
+
     pairs_dedup = df_relations[["source", "target"]].drop_duplicates()
     logger.debug(f"{len(pairs_dedup)} unique openaire id pairs")
     all_ids = (
@@ -173,26 +185,29 @@ def main(args):
     # logger.debug(f"writing to file: {outfp}")
     # df_crosstab.to_parquet(outfp)
 
-    outfp = outdir.joinpath("df_provenance.parquet")
-    logger.debug(f"saving provenance data to {outfp}")
-    df_relations[["source", "target", "provenance", "validated"]].drop_duplicates(
-        subset=["source", "target"]
-    ).to_parquet(outfp)
+    logger.debug("deleting df_relations and running garbage collection")
+    del df_relations
+    gc.collect()
+    logger.debug("gc.get_stats():")
+    logger.debug(gc.get_stats())
+    logger.debug("gc.garbage:")
+    logger.debug(gc.garbage)
 
     logger.debug(f"Step 4: merge relations and dois")
     this_start = timer()
-    df_relation_doi = df_crosstab.merge(
+    drop_cols = ["Cites", "IsSupplementedBy", "References"]
+    df_relation_doi = df_crosstab.drop(columns=drop_cols)
+    df_relation_doi = df_relation_doi.merge(
         df_openaire_doi.rename(columns={"openaire_id": "source", "doi": "doi_source"}),
         how="inner",
         on="source",
     )
+    logger.debug("done merging on source column. merging on target column...")
     df_relation_doi = df_relation_doi.merge(
         df_openaire_doi.rename(columns={"openaire_id": "target", "doi": "doi_target"}),
         how="inner",
         on="target",
     )
-    drop_cols = ["Cites", "IsSupplementedBy", "References"]
-    df_relation_doi = df_relation_doi.drop(columns=drop_cols)
     logger.debug(
         f"done merging relations and dois. df_relation_doi has shape {df_relation_doi.shape}. took {format_timespan(timer()-this_start)}"
     )
@@ -204,31 +219,27 @@ def main(args):
         f"loaded {len(df_corpus_citations_doi)} rows. took {format_timespan(timer()-this_start)}"
     )
 
-    logger.debug("Step 6: merge corpus data with openaire data")
+    logger.debug("Step 6: merge corpus data with openaire data and save files")
     this_start = timer()
     df_corpus_citations_doi["in_corpus"] = True
     df_relation_doi = df_relation_doi.merge(
         df_corpus_citations_doi, how="left", on=["doi_source", "doi_target"]
     )
     df_relation_doi["in_corpus"] = df_relation_doi["in_corpus"].fillna(value=False)
+    outfp = outdir.joinpath("df_relation_doi.parquet")
+    logger.debug(f"writing dataframe with shape {df_relation_doi.shape} to {outfp}")
+    df_relation_doi.to_parquet(outfp)
+    logger.debug("continuing to merge...")
     to_merge = df_relation_doi[df_relation_doi["in_corpus"] == True]
     to_merge = to_merge[["source", "target", "in_corpus"]].drop_duplicates()
     df_relation = df_crosstab.merge(to_merge, how="left", on=["source", "target"])
     df_relation["in_corpus"] = df_relation["in_corpus"].fillna(value=False)
-    logger.debug(
-        f"done merging in corpus data. took {format_timespan(timer()-this_start)}"
-    )
 
-    logger.debug("Step 7: save files")
-    this_start = timer()
     outfp = outdir.joinpath("df_relation.parquet")
     logger.debug(f"writing dataframe with shape {df_relation.shape} to {outfp}")
     df_relation.to_parquet(outfp)
 
-    outfp = outdir.joinpath("df_relation_doi.parquet")
-    logger.debug(f"writing dataframe with shape {df_relation_doi.shape} to {outfp}")
-    df_relation_doi.to_parquet(outfp)
-    logger.debug(f"step 7 (saving files) took {format_timespan(timer()-this_start)}")
+    logger.debug(f"step 6 (merging corpus with openaire and saving files) took {format_timespan(timer()-this_start)}")
 
 
 if __name__ == "__main__":

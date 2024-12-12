@@ -14,5 +14,7 @@ venv.bak/
 .env.backup*
 
 logs/
+data/
 
-organize_data*.ipynb
+# ignore notebooks for now
+*.ipynb
