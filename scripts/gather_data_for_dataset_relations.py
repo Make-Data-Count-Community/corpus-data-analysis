@@ -41,11 +41,15 @@ def load_relations_with_datasets(
     _dfs = []
     for fp in files:
         _df = pd.read_json(fp, lines=True, engine="pyarrow")
-        _df["relType_name"] = _df["relType"].apply(lambda x: x["name"])
+        _df["relType_name"] = (
+            _df["relType"].apply(lambda x: x["name"]).astype("category")
+        )
         _df = _df[["source", "target", "relType_name", "provenance", "validated"]]
         prov_objs = _df["provenance"].dropna()
-        _df["trust"] = prov_objs.apply(lambda x: x["trust"])
-        _df["provenance"] = prov_objs.apply(lambda x: x["provenance"])
+        _df["trust"] = prov_objs.apply(lambda x: float(x["trust"]))
+        _df["provenance"] = prov_objs.apply(lambda x: x["provenance"]).astype(
+            "category"
+        )
         _df = _df[_df["relType_name"].isin(["Cites", "References", "IsSupplementedBy"])]
         _dfs.append(_df)
     df_relations = pd.concat(_dfs, ignore_index=True)
@@ -64,6 +68,7 @@ def get_openaire_type_map(
         _df = pd.read_parquet(fp, columns=["openaire_id", "openaire_type"])
         if ids_to_include is not None:
             _df = _df[_df["openaire_id"].isin(ids_to_include)]
+        _df["openaire_type"] = _df["openaire_type"].astype("category")
         _dfs.append(_df)
     df_openaire_type = pd.concat(_dfs)
     openaire_type_map = df_openaire_type.set_index(
@@ -91,11 +96,14 @@ def get_openaire_dois(
 
 
 def get_crosstab(df: pd.DataFrame, type_map: pd.Series) -> pd.DataFrame:
+    cats = df["relType_name"].unique()
     df_crosstab = pd.crosstab(
-        [df["source"], df["target"]], df["relType_name"]
+        [df["source"], df["target"]], df["relType_name"].astype("string")
     ).reset_index(drop=False)
-    df_crosstab["source_type"] = df_crosstab["source"].map(type_map)
-    df_crosstab["target_type"] = df_crosstab["target"].map(type_map)
+    for colname in cats:
+        df_crosstab[colname] = df_crosstab[colname].astype("int8")
+    df_crosstab["source_type"] = df_crosstab["source"].map(type_map).astype("category")
+    df_crosstab["target_type"] = df_crosstab["target"].map(type_map).astype("category")
     return df_crosstab
 
 
@@ -143,7 +151,7 @@ def main(args):
         ["source", "target", "provenance", "trust", "validated"]
     ].drop_duplicates(subset=["source", "target"]).to_parquet(outfp)
     logger.debug("dropping provenance columns")
-    df_relations.drop(columns=['provenance', 'trust', 'validated'], inplace=True)
+    df_relations.drop(columns=["provenance", "trust", "validated"], inplace=True)
 
     pairs_dedup = df_relations[["source", "target"]].drop_duplicates()
     logger.debug(f"{len(pairs_dedup)} unique openaire id pairs")
@@ -239,7 +247,9 @@ def main(args):
     logger.debug(f"writing dataframe with shape {df_relation.shape} to {outfp}")
     df_relation.to_parquet(outfp)
 
-    logger.debug(f"step 6 (merging corpus with openaire and saving files) took {format_timespan(timer()-this_start)}")
+    logger.debug(
+        f"step 6 (merging corpus with openaire and saving files) took {format_timespan(timer()-this_start)}"
+    )
 
 
 if __name__ == "__main__":
