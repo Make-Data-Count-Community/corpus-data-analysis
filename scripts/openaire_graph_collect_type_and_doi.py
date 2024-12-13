@@ -152,11 +152,6 @@ def main(args):
     chunksize = args.chunksize
     n_jobs = args.n_jobs
 
-    # def process_one_tarfile(
-    #     path_to_tarfile: Union[str, Path],
-    #     outdir: Union[str, Path],
-    #     chunksize: int = 10000000,
-    # ) -> None:
     parallel_args = [
         [(fp,), {"outdir": outdir, "chunksize": chunksize}] for fp in raw_data_files
     ]

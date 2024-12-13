@@ -2,6 +2,15 @@
 
 import re
 import unicodedata
+import math
+
+
+# from https://stackoverflow.com/a/70274772
+def is_nan(value):
+    try:
+        return math.isnan(float(value))
+    except ValueError:
+        return False
 
 
 class NoDoiException(Exception):
@@ -47,7 +56,7 @@ def replace_doi_bad_chars(doi):
 
 
 def clean_doi(dirty_doi, return_none_if_error=False):
-    if not dirty_doi:
+    if not dirty_doi or is_nan(dirty_doi):
         if return_none_if_error:
             return None
         else:
