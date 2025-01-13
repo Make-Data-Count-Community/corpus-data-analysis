@@ -35,4 +35,4 @@ erDiagram
     EUROPEPMC one to one REPOSITORY : "in"
 ```
 
-Relationships are drawn using <https://en.wikipedia.org/wiki/Entity%E2%80%93relationship_model#Crow's_foot_notation>
+Relationships are drawn using [crow's foot notation](https://en.wikipedia.org/wiki/Entity%E2%80%93relationship_model#Crow's_foot_notation).
