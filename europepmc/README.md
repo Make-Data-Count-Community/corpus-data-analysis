@@ -15,6 +15,8 @@ erDiagram
         string publication_id "Currently only DOI allowed"
         string dataset_id "DOI or accession number"
         category repository "not necessarily matched to the EuropePMC repository"
+        bool publication_is_doi
+        bool dataset_is_doi
     }
     EUROPEPMC["EuropePMC Accession Number Citation"] {
         string accession_number PK
