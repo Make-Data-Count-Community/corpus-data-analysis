@@ -231,6 +231,16 @@ def process_row(work: dict) -> dict:
             funders.add(grant.get("funder_display_name"))
         return list(funders)
 
+    def get_primary_topic(topics: list[dict]) -> tuple[str, str, str, str]:
+        if not topics:
+            return (None, None, None, None)
+        primary_topic_dict = topics[0]
+        primary_topic_name = primary_topic_dict.get("display_name")
+        subfield_name = primary_topic_dict.get("subfield", {}).get("display_name")
+        field_name = primary_topic_dict.get("field", {}).get("display_name")
+        domain_name = primary_topic_dict.get("domain", {}).get("display_name")
+        return primary_topic_name, subfield_name, field_name, domain_name
+
     openalex_id = work["id"].split("/")[-1]
     doi = work["doi"].replace("https://doi.org/", "")
     if "pmid" in work["ids"]:
@@ -245,6 +255,7 @@ def process_row(work: dict) -> dict:
         work.get("authorships", [])
     )
     funders = get_funders(work.get("grants", []))
+    primary_topic, subfield, field, domain = get_primary_topic(work.get("topics"))
     row = {
         "openalex_id": openalex_id,
         "doi": doi,
@@ -261,6 +272,10 @@ def process_row(work: dict) -> dict:
         "funders": funders,
         "datasets": work.get("datasets"),
         "cited_by_count": work.get("cited_by_count"),
+        "primary_topic": primary_topic,
+        "topic_subfield": subfield,
+        "topic_field": field,
+        "topic_domain": domain,
     }
     return row
 
