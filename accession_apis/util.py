@@ -12,7 +12,7 @@ def parse_geo_downloaded_jsonlines_file(filename: str) -> list[dict]:
     with open(filename, "r") as f:
         for i, line in enumerate(f):
             try:
-                affil_data.append(parse_geo_downloaded_single_line)
+                affil_data.append(parse_geo_downloaded_single_line(line))
             except json.JSONDecodeError:
                 warnings.warn(
                     f"problem parsing line {i} in file {filename}. skipping..."
